@@ -172,6 +172,7 @@ def get_config(token_rate=100, vocab_size=None, checkpoint_path=None):
     if checkpoint_path is None:
         checkpoint_path = "semanticodec_tokenrate_%s" % token_rate
     else:
+        checkpoint_path = f"{checkpoint_path}/semanticodec_tokenrate_{token_rate}"
         print("Using custom checkpoint path: %s" % checkpoint_path)
 
     feature_dim = basic_config["model"]["params"]["cond_stage_config"]["crossattn_audiomae_pooled"]["params"]["feature_dimension"]

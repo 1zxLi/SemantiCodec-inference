@@ -89,6 +89,7 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
         mask_list = [None] + mask_list
 
         for layer in self:
+            layer = layer.half()
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
             elif isinstance(layer, SpatialTransformer):
@@ -863,6 +864,7 @@ class UNetModel(nn.Module):
         ), "must specify y if and only if the model is class-conditional or film embedding conditional"
         hs = []
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        t_emb = t_emb.half()
         emb = self.time_embed(t_emb)
 
         # if self.num_classes is not None:
@@ -872,7 +874,9 @@ class UNetModel(nn.Module):
         if self.use_extra_film_by_concat:
             emb = th.cat([emb, self.film_emb(y)], dim=-1)
 
-        h = x.type(self.dtype)
+        h = x.type(self.dtype).half()
+        context_list = [tensor.half() for tensor in context_list]
+        context_attn_mask_list = [tensor.half() for tensor in context_attn_mask_list]
         for module in self.input_blocks:
             h = module(h, emb, context_list, context_attn_mask_list)
             hs.append(h)
@@ -881,7 +885,7 @@ class UNetModel(nn.Module):
             concate_tensor = hs.pop()
             h = th.cat([h, concate_tensor], dim=1)
             h = module(h, emb, context_list, context_attn_mask_list)
-        h = h.type(x.dtype)
+        h = h.type(x.dtype).half()
         if self.predict_codebook_ids:
             return self.id_predictor(h)
         else:

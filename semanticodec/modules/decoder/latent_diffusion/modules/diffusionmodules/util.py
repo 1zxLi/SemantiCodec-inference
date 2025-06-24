@@ -237,10 +237,16 @@ class SiLU(nn.Module):
         return x * torch.sigmoid(x)
 
 
+# class GroupNorm32(nn.GroupNorm):
+#     def forward(self, x):
+#         return super().forward(x.float()).type(x.dtype)
 class GroupNorm32(nn.GroupNorm):
-    def forward(self, x):
-        return super().forward(x.float()).type(x.dtype)
+    def __init__(self, num_groups, num_channels, **kwargs):
+        super().__init__(num_groups, num_channels, **kwargs)
+        self.half()  # 将参数转为 float16
 
+    def forward(self, x):
+        return super().forward(x)
 
 def conv_nd(dims, *args, **kwargs):
     """

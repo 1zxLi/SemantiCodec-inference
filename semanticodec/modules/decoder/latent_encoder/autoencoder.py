@@ -110,6 +110,7 @@ class AutoencoderKL(nn.Module):
         return posterior
 
     def decode(self, z):
+        z = z.half()
         z = self.post_quant_conv(z)
         dec = self.decoder(z)
         # bs, ch, shuffled_timesteps, fbins = dec.size()

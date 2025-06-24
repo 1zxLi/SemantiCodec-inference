@@ -59,7 +59,7 @@ def get_config(token_rate=100, vocab_size=None, checkpoint_path=None):
             "monitor": "val/rec_loss", 
             "image_key": "fbank", 
             "embed_dim": 8, 
-            "batchsize": 16, 
+            "batchsize": 16,
             "reload_from_ckpt": "/mnt/bn/lqhaoheliu/exps/checkpoints/audioldm/vae_32k/2023_06_22_vae_16k_64_4/last.ckpt", 
             "subband": 1, 
             "time_shuffle": 1, 

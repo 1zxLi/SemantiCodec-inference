@@ -76,14 +76,14 @@ class Vanilla_AudioMAE(nn.Module):
         """
         with torch.no_grad():
             # embed: [B, 513, 768] for mask_ratio=0.0
-            if no_mask:
+            if no_mask:  #配置为True
                 if no_average:
                     raise RuntimeError("This function is deprecated")
                     embed = self.model.forward_encoder_no_random_mask_no_average(
                         x
                     )  # mask_ratio
                 else:
-                    embed = self.model.forward_encoder_no_mask(x)  # mask_ratio
+                    embed = self.model.forward_encoder_no_mask(x)  # mask_ratio  #禁用随机掩码，返回编码后的嵌入
             else:
                 raise RuntimeError("This function is deprecated")
                 embed, _, _, _ = self.model.forward_encoder(x, mask_ratio=mask_ratio)
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     input = torch.randn(4, 1, 1024, 128).cuda()
     print("The first run")
     embed = model(input, mask_ratio=0.0, no_mask=True)
-    print(embed)
+    print(embad)
     print("The second run")
     embed = model(input, mask_ratio=0.0)
     print(embed)

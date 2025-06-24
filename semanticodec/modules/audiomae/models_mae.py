@@ -445,27 +445,61 @@ class MaskedAutoencoderViT(nn.Module):
 
     def forward_encoder_no_mask(self, x):
         # embed patches
-        x = self.patch_embed(x)
+        # 生成上下文嵌入  无随机掩码的输入  将输入梅尔频谱图转换为 patch 嵌入，添加位置编码，应用 Transformer 编码器，并生成上下文嵌入。
+        # 输入：x，形状为 [batch_size, channels, height, width]（例如，[batch_size, 1, 1024, 128]，表示梅尔频谱图）。
+        # 输出：contextual_emb，形状为 [batch_size, num_patches+1, embed_dim]（例如，[batch_size, 513, 768]，包含 CLS token 和 patch 嵌入）。
+        # x(batch_size,1,1024,128)
+
+        x = self.patch_embed(x)  #将输入梅尔频谱图分割为 patch，并映射到嵌入空间。  x(bs,512,768)，768为特征通道数，512为patch数。
 
         # add pos embed w/o cls token
-        x = x + self.pos_embed[:, 1:, :]
+        # self.pos_embed 是预定义的位置编码张量，形状为 [1, num_patches+1, embed_dim]
+        # 第一个位置（self.pos_embed[:, 0, :]）是为 CLS token 保留的。
+        # 其余位置（self.pos_embed[:, 1:, :]）对应于 patch 的位置编码，形状为 [1, 512, 768]。
+        # x + self.pos_embed[:, 1:, :] 将每个 patch 的嵌入与对应的位置编码相加，保持形状 [batch_size, 512, 768]。
+        x = x + self.pos_embed[:, 1:, :]   #为 patch 嵌入添加位置编码，不包括 CLS token 的位置编码
 
         # masking: length -> length * mask_ratio
         # x, mask, ids_restore = self.random_masking(x, mask_ratio)
+
+
         # append cls token
-        cls_token = self.cls_token + self.pos_embed[:, :1, :]
-        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        # 添加 CLS token 到 patch 嵌入序列，形成完整的 Transformer 输入。
+        # [CLS] Token 被用来汇总patch的全局特征  在 ViT 中，输入图像被划分为多个固定大小的 Patch，
+        # 然后每个 Patch 被投影到一个 D维的特征向量空间，形成 Token 序列。
+        # 为了让模型学习到全局信息，ViT 在输入序列的最前面添加一个特殊的 [CLS] Token：
+        # CLS token的最终表示会包含输入音频序列的全局信息。由于自注意力机制的设计，
+        # 它会在不同的时间步长上与其他音频帧（或其他音频标记）进行交互，最终生成一个综合的音频表示。
+        # 在音频重建任务中，模型的目标是根据这个全局表示来完成对音频的恢复或生成。
+
+        # self.cls_token 是一个可学习的 CLS token，形状为 [1, 1, embed_dim]（例如，[1, 1, 768]），用于捕获全局上下文。
+        # self.pos_embed[:, :1, :] 是 CLS token 的位置编码，形状为 [1, 1, 768]。
+        cls_token = self.cls_token + self.pos_embed[:, :1, :]  #将 CLS token 与其位置编码相加，形状仍为 [1, 1, 768]
+        cls_tokens = cls_token.expand(x.shape[0], -1, -1) #扩展 CLS token 以匹配批次大小，形状变为 [batch_size, 1, 768]。
+        x = torch.cat((cls_tokens, x), dim=1)   # torch.cat((cls_tokens, x), dim=1) 将 CLS token 拼接在 patch 嵌入序列的前面：
+        # CLS token 插入到音频序列的开头，作为输入的一部分。这样，模型在经过自注意力计算时，CLS token 会与其他音频帧的特征进行交互，
+        # 最终得到一个包含全局信息的 CLS token 表示。
+        # x 形状变为 [batch_size, 513, 768]，表示包含 CLS token 的完整序列。
 
         # apply Transformer blocks
+        # 通过 Transformer 编码器块处理输入序列，捕获上下文信息，并收集深层嵌入。
         contextual_embs = []
         for n, blk in enumerate(self.blocks):
-            x = blk(x)
-            if n > self.contextual_depth:
-                contextual_embs.append(self.norm(x))
-        # x = self.norm(x)
-        contextual_emb = torch.stack(contextual_embs, dim=0).mean(dim=0)
+            # 每个 Block 的结构：LayerNorm（norm1 和 norm2）：在每个子层之前进行层归一化，以帮助训练过程中保持稳定。
+            # Self-Attention（attn）：自注意力机制，模型在每个位置上计算输入序列中各个部分的相关性（Q、K、V）。这使得模型能够捕捉长范围的依赖关系。
+            #   qkv: 线性层，用于计算查询（Q）、键（K）和值（V），它们会根据注意力机制来进行加权组合。
+                # 通过计算 Q 和 K 的点积，得到注意力分数，再通过Softmax对其进行归一化，得到每个位置对其他位置的关注度，最后将关注度与V进行加权求和
+            #   proj: 线性层，用于将注意力的输出映射回原始的嵌入维度（768），并进行投影。
+            # MLP：每个 Block 包含一个简单的多层感知机（包括两个线性层和一个 GELU 激活函数）。
+            # Dropout：每个模块都有 Dropout，防止过拟合。
+            # Drop Path：用来在训练过程中随机丢弃某些路径，这是一种正则化技术，有助于提高模型的泛化能力。
 
+            x = blk(x)  # x = blk(x) 依次通过每个 Transformer 块，更新 x 的表示，形状保持 [batch_size, 513, 768]。
+            if n > self.contextual_depth:  # 如果 self.contextual_depth = 8，则从第 9 层以后（索引从 0 开始）的输出会被收集。
+                contextual_embs.append(self.norm(x))  #self.norm 是一个 LayerNorm 模块，标准化每个 token 的嵌入（[batch_size, 513, 768]）。
+        # x = self.norm(x)
+        contextual_emb = torch.stack(contextual_embs, dim=0).mean(dim=0)   # 收集的深层嵌入堆叠并取平均，生成最终的上下文嵌入。
+        #contextual_embs 是一个列表，包含若干 [batch_size, 513, 768] 的张量（例如，如果 self.contextual_depth = 8 和总层数为 12，则包含 4 个张量）。
         return contextual_emb
 
     def forward_decoder(self, x, ids_restore):

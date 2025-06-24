@@ -186,14 +186,15 @@ class DDIMSampler(object):
         dynamic_threshold=None,
         ucg_schedule=None,
     ):
+        # 执行 DDIM 逆向去噪，从噪声样本（x_T 或随机噪声）生成潜在表示（img）。
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
-            img = torch.randn(shape, device=device)
+            img = torch.randn(shape, device=device)  #标准正态噪声
         else:
-            img = x_T
+            img = x_T  #初始化预设噪声
 
-        if timesteps is None:
+        if timesteps is None:  #产生时间步
             timesteps = (
                 self.ddpm_num_timesteps
                 if ddim_use_original_steps
@@ -209,12 +210,12 @@ class DDIMSampler(object):
             )
             timesteps = self.ddim_timesteps[:subset_end]
 
-        intermediates = {"x_inter": [img], "pred_x0": [img]}
+        intermediates = {"x_inter": [img], "pred_x0": [img]}  #初始化输入输出，x_inter：每步噪声样本（x_t）。 pred_x0：每步预测的干净样本
         time_range = (
             reversed(range(0, timesteps))
             if ddim_use_original_steps
             else np.flip(timesteps)
-        )
+        )  #从1开始 间隔20
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
 
         iterator = tqdm(time_range, desc="DDIM Sampler", total=total_steps)
@@ -233,10 +234,10 @@ class DDIMSampler(object):
             if ucg_schedule is not None:
                 assert len(ucg_schedule) == len(time_range)
                 unconditional_guidance_scale = ucg_schedule[i]
-
+            # img（1，8，256，16） cond(list 2, 0:(1,128,6336 latent),1(1,128 pe))
             outs = self.p_sample_ddim(
-                img,
-                cond,
+                img,  #噪声
+                cond,  #条件
                 ts,
                 index=index,
                 use_original_steps=ddim_use_original_steps,
@@ -249,7 +250,7 @@ class DDIMSampler(object):
                 unconditional_conditioning=unconditional_conditioning,
                 dynamic_threshold=dynamic_threshold,
             )
-            img, pred_x0 = outs
+            img, pred_x0 = outs  #img：更清晰的样本（继续迭代）。  pred_x0：当前对最终音频的猜测。
             if callback:
                 callback(i)
             if img_callback:
@@ -259,7 +260,7 @@ class DDIMSampler(object):
                 intermediates["x_inter"].append(img)
                 intermediates["pred_x0"].append(pred_x0)
 
-        return img, intermediates
+        return img, intermediates  #img （最终去噪样本）
 
     @torch.no_grad()
     def p_sample_ddim(
@@ -280,11 +281,11 @@ class DDIMSampler(object):
         dynamic_threshold=None,
     ):
         b, *_, device = *x.shape, x.device
-
+        # x[1, 8, 256, 16]。 c(list2,0:(1,128,latent)，1:(1,128 pe))  从当前噪声中预测下一样点和干净样点估计
         if unconditional_conditioning is None or unconditional_guidance_scale == 1.0:
             model_output = self.model.apply_model(x, t, c)
         else:
-            x_in = x
+            x_in = x  # [1, 8, 256, 16].
             t_in = t
 
             assert isinstance(c, dict)
@@ -292,15 +293,19 @@ class DDIMSampler(object):
 
             model_uncond = self.model.apply_model(
                 x_in, t_in, unconditional_conditioning
-            )
-            model_t = self.model.apply_model(x_in, t_in, c)
+            )  #无条件噪声预测
+            model_t = self.model.apply_model(x_in, t_in, c)  #有条件噪声预测
 
             model_output = model_uncond + unconditional_guidance_scale * (
                 model_t - model_uncond
-            )
-
-        if self.model.parameterization == "v":
-            e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
+            )  #含义：增强条件预测，scale=2 提高语义一致性。
+        # 扩散模型的理念是：从纯噪声开始，通过多步“降噪”，逐步逼近真实数据。
+        # 每一步都要：
+            # 猜出“噪声有多大”（预测噪声成分）
+            # 猜出“最终清晰的样子”（预测x_0）。
+            # 用这些猜测计算“下一步稍微清晰一点的样子”（生成x_t-1）
+        if self.model.parameterization == "v":  #模型并非直接输出噪声 模型的输出应该是一种多元素音频，因此需要从中提炼出噪声
+            e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)  #把model_output转换为噪声，从model_output、x, t中计算噪声
         else:
             e_t = model_output
 
@@ -327,18 +332,18 @@ class DDIMSampler(object):
             else self.ddim_sigmas
         )
         # select parameters corresponding to the currently considered timestep
-        a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
-        a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
-        sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
+        a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)  #当前信号比例（清晰音频占多少）
+        a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device) #下一步信号比例。
+        sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)   # 控制随机性的强度
         sqrt_one_minus_at = torch.full(
             (b, 1, 1, 1), sqrt_one_minus_alphas[index], device=device
-        )
+        )  ##当前噪声比例（杂音占多少）。
 
         # current prediction for x_0
         if self.model.parameterization != "v":
             pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
         else:
-            pred_x0 = self.model.predict_start_from_z_and_v(x, t, model_output)
+            pred_x0 = self.model.predict_start_from_z_and_v(x, t, model_output) ## 预测“最终清晰样本”，从x, t, model_output中计算清晰样本
 
         if quantize_denoised:
             pred_x0, _, *_ = self.model.first_stage_model.quantize(pred_x0)
@@ -346,13 +351,13 @@ class DDIMSampler(object):
         if dynamic_threshold is not None:
             raise NotImplementedError()
 
-        # direction pointing to x_t
-        dir_xt = (1.0 - a_prev - sigma_t**2).sqrt() * e_t
-        noise = sigma_t * noise_like(x.shape, device, repeat_noise) * temperature
+        # direction pointing to x_t #计算下一步样本
+        dir_xt = (1.0 - a_prev - sigma_t**2).sqrt() * e_t #噪声方向
+        noise = sigma_t * noise_like(x.shape, device, repeat_noise) * temperature  #随机抖动
         if noise_dropout > 0.0:
             noise = torch.nn.functional.dropout(noise, p=noise_dropout)
-        x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-        return x_prev, pred_x0
+        x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise  # 结合预测的清晰样本（pred_x0）、噪声方向、随机抖动。
+        return x_prev, pred_x0  #x_prev：更清晰的样本（继续迭代）。  pred_x0：当前对最终音频的猜测。
 
     @torch.no_grad()
     def encode(

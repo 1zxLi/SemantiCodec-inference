@@ -467,41 +467,49 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def generate_sample(
         self,
-        quanized_feature,
-        ddim_steps=200,
-        ddim_eta=1.0,
-        x_T=None,
-        unconditional_guidance_scale=1.0,
+        quanized_feature, #语义 + 声学特征。
+        ddim_steps=200,  #控制 DDIM 采样的迭代次数（200步  平衡质量与速度）
+        ddim_eta=1.0,   #控制随机性（1.0 表示标准扩散，0.0 表示确定性 DDIM）
+        x_T=None,      #初始噪声（None 时随机生成，通常为高斯噪声）。
+        unconditional_guidance_scale=1.0,   #控制条件引导强度（若为1.0 表示无无条件引导）。
     ):
-        batch_size = quanized_feature.shape[0]
+        #  下述注释假设 token_rate=25情况下，输入的quanized_feature 为 128
+        batch_size = quanized_feature.shape[0]  #获取批次大小（batch_size），
 
-        pe = self.pos_embed(quanized_feature)
+        pe = self.pos_embed(quanized_feature)  #为 quanized_feature 添加位置嵌入 pe（1，128，192）
+        # 扩散模型同时预测有条件（conditioned）和无条件（unconditioned）输出。
+        # 有条件：使用 quanized_feature（语义 + 声学）。
+        # 无条件：使用零特征，仅保留位置信息。
 
+        # # 构造无条件特征
         unconditional_conditioning = {}
         if unconditional_guidance_scale != 1.0:
+
             unconditional_quanized_feature = torch.cat(
                 [
-                    quanized_feature * 0.0,
+                    quanized_feature * 0.0,  # 生成全零特征，移除语义和声学信息，保留形状
                     pe.repeat(quanized_feature.size(0), 1, 1).to(
-                        quanized_feature.device
+                        quanized_feature.device    #复制位置嵌入
                     ),
-                ],
+                ],  #仅保留位置信息，用于无条件预测。
                 dim=-1,
             )
+            # 无条件下的输入：
             unconditional_conditioning = {
                 "crossattn_audiomae_pooled": [
-                    unconditional_quanized_feature,
+                    unconditional_quanized_feature,   #无条件输入，包含零特征 + 位置嵌入。
                     torch.ones(
                         (
                             unconditional_quanized_feature.size(0),
                             unconditional_quanized_feature.size(1),
                         )
-                    )
+                    )  #时间掩码，全为1 ，表示所有时间步有效。
                     .to(unconditional_quanized_feature.device)
                     .float(),
                 ]
             }
-
+        # 条件特征构造
+        # quanized_feature ： 将原始特征与位置嵌入拼接。 原 [1, 128, 6144] + pe [1, 128, 192]。新 [1, 128, 6336]。
         quanized_feature = torch.cat(
             [
                 quanized_feature,
@@ -509,19 +517,20 @@ class LatentDiffusion(DDPM):
             ],
             dim=-1,
         )
+        # latent 是扩散模型的有条件输入。quanized_feature：条件特征，包含语义、声学和位置信息。 torch.ones((1, 128))：时间掩码，表示 128 个时间步有效。 # 128为token_rate=25情况下
         latent = {
             "crossattn_audiomae_pooled": [
                 quanized_feature,
                 torch.ones((quanized_feature.size(0), quanized_feature.size(1)))
-                .to(quanized_feature.device)
+                .to(quanized_feature.device)  # 时间掩码，表示所有时间步有效。
                 .float(),
             ]
-        }
-
+        }   #作为 UNetModel 的条件输入，指导扩散过程。
+        # 使用 DDIM 采样从噪声生成潜在表示（samples）。
         samples, _ = self.sample_log(
-            cond=latent,
+            cond=latent,  # 有条件输入（latent），[1, 128, 3072] + 掩码。
             batch_size=batch_size,
-            x_T=x_T,
+            x_T=x_T,  #初始噪声
             ddim=True,
             ddim_steps=ddim_steps,
             eta=ddim_eta,
@@ -529,9 +538,9 @@ class LatentDiffusion(DDPM):
             unconditional_conditioning=unconditional_conditioning,
         )
 
-        mel = self.decode_first_stage(samples)
+        mel = self.decode_first_stage(samples)  #将扩散模型的潜在表示（samples）解码为梅尔频谱图。
 
-        return self.mel_spectrogram_to_waveform(mel)
+        return self.mel_spectrogram_to_waveform(mel)  #将梅尔频谱图转换为波形。
 
 
 class DiffusionWrapper(nn.Module):
